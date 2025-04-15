@@ -1,188 +1,157 @@
-// BEIL 
-
 #include <windows.h>
-#include <iostream>
-#include <cmath>
-#include <iomanip>
-#include <sstream>
-#include <queue>
 
+LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 
-template<typename T>
-struct Mailbox {
-    std::queue<T> messages;
-    HANDLE access_semaphore;
-    HANDLE items_semaphore;
-};
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLine, int iCmdShow) {
+    static TCHAR szAppName[] = TEXT("Винни-Пух");
+    HWND hwnd;
+    MSG msg;
+    WNDCLASS wndclass;
 
+    wndclass.style = CS_HREDRAW | CS_VREDRAW;
+    wndclass.lpfnWndProc = WndProc;
+    wndclass.cbClsExtra = 0;
+    wndclass.cbWndExtra = 0;
+    wndclass.hInstance = hInstance;
+    wndclass.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+    wndclass.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wndclass.hbrBackground = (HBRUSH)GetStockObject(WHITE_BRUSH);
+    wndclass.lpszMenuName = NULL;
+    wndclass.lpszClassName = szAppName;
 
-Mailbox<double> mailboxA;
-Mailbox<double> mailboxB;
-Mailbox<double> mailboxSquareA;
-Mailbox<double> mailboxSquareB;
-Mailbox<double> mailboxSum;
-Mailbox<double> mailboxResult;
-
-HANDLE log_semaphore;
-
-std::string DoubleToString(double value) {
-    std::ostringstream oss;
-    oss << value;
-    return oss.str();
-}
-
-void LogWithTimestamp(const char* message) {
-    SYSTEMTIME st;
-    GetLocalTime(&st);
-
-    WaitForSingleObject(log_semaphore, INFINITE);
-    std::cout << "["
-        << std::setfill('0') << std::setw(2) << st.wHour << ":"
-        << std::setfill('0') << std::setw(2) << st.wMinute << ":"
-        << std::setfill('0') << std::setw(2) << st.wSecond << "."
-        << std::setfill('0') << std::setw(3) << st.wMilliseconds
-        << "][Thread " << GetCurrentThreadId() << "] "
-        << message << std::endl;
-    ReleaseSemaphore(log_semaphore, 1, NULL);
-}
-
-template<typename T>
-void SendToMailbox(Mailbox<T>& mailbox, const T& value) {
-    WaitForSingleObject(mailbox.access_semaphore, INFINITE);
-    mailbox.messages.push(value);
-    ReleaseSemaphore(mailbox.access_semaphore, 1, NULL);
-    ReleaseSemaphore(mailbox.items_semaphore, 1, NULL);
-}
-
-template<typename T>
-T ReceiveFromMailbox(Mailbox<T>& mailbox) {
-    WaitForSingleObject(mailbox.items_semaphore, INFINITE);
-    WaitForSingleObject(mailbox.access_semaphore, INFINITE);
-    T value = mailbox.messages.front();
-    mailbox.messages.pop();
-    ReleaseSemaphore(mailbox.access_semaphore, 1, NULL);
-    return value;
-}
-
-DWORD WINAPI SquareThread(LPVOID lpParam) {
-    int thread_id = (int)lpParam;
-
-    while (true) {
-        double value;
-        Mailbox<double>* output_mailbox;
-        const char* prefix;
-
-        if (thread_id == 0) {
-            value = ReceiveFromMailbox(mailboxA);
-            output_mailbox = &mailboxSquareA;
-            prefix = "A";
-        }
-        else {
-            value = ReceiveFromMailbox(mailboxB);
-            output_mailbox = &mailboxSquareB;
-            prefix = "B";
-        }
-
-        LogWithTimestamp((std::string("Processing ") + prefix + " value: " + DoubleToString(value)).c_str());
-
-        double result = value * value;
-        Sleep(1000);
-        LogWithTimestamp((std::string(prefix) + " square result: " + DoubleToString(result)).c_str());
-
-        SendToMailbox(*output_mailbox, result);
-    }
-    return 0;
-}
-
-DWORD WINAPI SumThread(LPVOID) {
-    while (true) {
-        double a = ReceiveFromMailbox(mailboxSquareA);
-        double b = ReceiveFromMailbox(mailboxSquareB);
-        LogWithTimestamp((std::string("Adding ") + DoubleToString(a) + " and " + DoubleToString(b)).c_str());
-
-        double result = a + b;
-        Sleep(1000);
-        LogWithTimestamp((std::string("Sum result: ") + DoubleToString(result)).c_str());
-
-        SendToMailbox(mailboxSum, result);
-    }
-    return 0;
-}
-
-DWORD WINAPI SqrtThread(LPVOID) {
-    while (true) {
-        double value = ReceiveFromMailbox(mailboxSum);
-        LogWithTimestamp((std::string("Calculating square root of ") + DoubleToString(value)).c_str());
-
-        double result = sqrt(value);
-        Sleep(2000);
-        LogWithTimestamp((std::string("Final result: ") + DoubleToString(result)).c_str());
-
-        SendToMailbox(mailboxResult, result);
-    }
-    return 0;
-}
-
-void InitializeMailbox(Mailbox<double>& mailbox) {
-    mailbox.access_semaphore = CreateSemaphore(NULL, 1, 1, NULL);
-    mailbox.items_semaphore = CreateSemaphore(NULL, 0, 100, NULL);
-}
-
-int main() {
-    setlocale(LC_ALL, "Russian");
-
-    InitializeMailbox(mailboxA);
-    InitializeMailbox(mailboxB);
-    InitializeMailbox(mailboxSquareA);
-    InitializeMailbox(mailboxSquareB);
-    InitializeMailbox(mailboxSum);
-    InitializeMailbox(mailboxResult);
-
-    log_semaphore = CreateSemaphore(NULL, 1, 1, NULL);
-
-    HANDLE threads[4];
-    threads[0] = CreateThread(NULL, 0, SquareThread, (LPVOID)0, 0, NULL); 
-    threads[1] = CreateThread(NULL, 0, SquareThread, (LPVOID)1, 0, NULL);
-    threads[2] = CreateThread(NULL, 0, SumThread, NULL, 0, NULL);
-    threads[3] = CreateThread(NULL, 0, SqrtThread, NULL, 0, NULL);
-
-    int check = 1;
-    while (true) {
-        double a, b;
-        std::cout << "Введите катет A: ";
-        std::cin >> a;
-        std::cout << "Введите катет B: ";
-        std::cin >> b;
-
-        SendToMailbox(mailboxA, a);
-        SendToMailbox(mailboxB, b);
-
-        double result = ReceiveFromMailbox(mailboxResult);
-        LogWithTimestamp((std::string("\nГипотенуза: ") + DoubleToString(result)).c_str());
-
-        std::cout << "\n\nВведите 0 для продолжения или другое число для выхода: ";
-        std::cin >> check;
-        if (check != 0) break;
+    if (!RegisterClass(&wndclass)) {
+        MessageBox(NULL, TEXT("Ошибка регистрации класса окна!"), szAppName, MB_ICONERROR);
+        return 0;
     }
 
-    for (int i = 0; i < 4; i++) {
-        TerminateThread(threads[i], 0);
-        CloseHandle(threads[i]);
+    hwnd = CreateWindow(szAppName,
+        TEXT("Винни-Пух с горшочком меда"),
+        WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        600,
+        600,
+        NULL,
+        NULL,
+        hInstance,
+        NULL);
+
+    ShowWindow(hwnd, iCmdShow);
+    UpdateWindow(hwnd);
+
+    while (GetMessage(&msg, NULL, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+    return msg.wParam;
+}
+
+LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    HDC hdc;
+    PAINTSTRUCT ps;
+    HPEN hPen;
+    HBRUSH hBrush;
+    HFONT hFont; // Объявляем переменную вне блока case
+
+    switch (message) {
+    case WM_PAINT:
+        hdc = BeginPaint(hwnd, &ps);
+
+        // Устанавливаем режим отображения сглаженных линий
+        SetGraphicsMode(hdc, GM_ADVANCED);
+
+        // Рисуем фон (небо и траву)
+        hBrush = CreateSolidBrush(RGB(135, 206, 235)); // Цвет неба
+        SelectObject(hdc, hBrush);
+        Rectangle(hdc, 0, 0, 600, 400);
+        DeleteObject(hBrush);
+
+        hBrush = CreateSolidBrush(RGB(34, 139, 34)); // Цвет травы
+        SelectObject(hdc, hBrush);
+        Rectangle(hdc, 0, 400, 600, 600);
+        DeleteObject(hBrush);
+
+        // Рисуем Винни-Пуха (упрощенная версия)
+
+        // Тело (желтый овал)
+        hBrush = CreateSolidBrush(RGB(255, 215, 0)); // Золотистый цвет
+        SelectObject(hdc, hBrush);
+        Ellipse(hdc, 200, 200, 400, 450);
+        DeleteObject(hBrush);
+
+        // Голова (желтый круг)
+        hBrush = CreateSolidBrush(RGB(255, 215, 0));
+        SelectObject(hdc, hBrush);
+        Ellipse(hdc, 225, 100, 375, 250);
+        DeleteObject(hBrush);
+
+        // Уши (два маленьких круга)
+        hBrush = CreateSolidBrush(RGB(255, 215, 0));
+        SelectObject(hdc, hBrush);
+        Ellipse(hdc, 235, 80, 275, 120);  // Левое ухо
+        Ellipse(hdc, 325, 80, 365, 120);  // Правое ухо
+        DeleteObject(hBrush);
+
+        // Глаза (два маленьких черных круга)
+        hBrush = CreateSolidBrush(RGB(0, 0, 0));
+        SelectObject(hdc, hBrush);
+        Ellipse(hdc, 270, 150, 290, 170);  // Левый глаз
+        Ellipse(hdc, 310, 150, 330, 170);  // Правый глаз
+        DeleteObject(hBrush);
+
+        // Нос (черный овал)
+        hBrush = CreateSolidBrush(RGB(0, 0, 0));
+        SelectObject(hdc, hBrush);
+        Ellipse(hdc, 280, 180, 320, 200);
+        DeleteObject(hBrush);
+
+        // Рот (дуга)
+        hPen = CreatePen(PS_SOLID, 2, RGB(0, 0, 0));
+        SelectObject(hdc, hPen);
+        Arc(hdc, 280, 180, 320, 220, 320, 190, 280, 190);
+        DeleteObject(hPen);
+
+        // Лапы (4 овала)
+        hBrush = CreateSolidBrush(RGB(255, 215, 0));
+        SelectObject(hdc, hBrush);
+        Ellipse(hdc, 180, 300, 220, 350);  // Левая передняя
+        Ellipse(hdc, 380, 300, 420, 350);  // Правая передняя
+        Ellipse(hdc, 200, 400, 250, 450);  // Левая задняя
+        Ellipse(hdc, 350, 400, 400, 450);  // Правая задняя
+        DeleteObject(hBrush);
+
+        // Горшок меда (коричневый)
+        hBrush = CreateSolidBrush(RGB(139, 69, 19));
+        SelectObject(hdc, hBrush);
+        Ellipse(hdc, 350, 250, 450, 300);  // Верх горшка
+        Rectangle(hdc, 350, 275, 450, 350);  // Основа горшка
+        Ellipse(hdc, 350, 325, 450, 375);  // Низ горшка
+
+        // Надпись "МЁД"
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, RGB(255, 255, 0));
+        hFont = CreateFont(30, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+            OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, VARIABLE_PITCH, TEXT("Arial"));
+        SelectObject(hdc, hFont);
+        TextOut(hdc, 370, 290, TEXT("МЁД"), 3);
+        DeleteObject(hFont);
+        DeleteObject(hBrush);
+
+        // Лапа с горшочком (часть руки держащая горшок)
+        hPen = CreatePen(PS_SOLID, 3, RGB(0, 0, 0));
+        SelectObject(hdc, hPen);
+        MoveToEx(hdc, 380, 300, NULL);
+        LineTo(hdc, 400, 280);
+        LineTo(hdc, 420, 290);
+        DeleteObject(hPen);
+
+        EndPaint(hwnd, &ps);
+        return 0;
+
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
     }
 
-    CloseHandle(mailboxA.access_semaphore);
-    CloseHandle(mailboxA.items_semaphore);
-    CloseHandle(mailboxB.access_semaphore);
-    CloseHandle(mailboxB.items_semaphore);
-    CloseHandle(mailboxSquareA.access_semaphore);
-    CloseHandle(mailboxSquareA.items_semaphore);
-    CloseHandle(mailboxSquareB.access_semaphore);
-    CloseHandle(mailboxSquareB.items_semaphore);
-    CloseHandle(mailboxSum.access_semaphore);
-    CloseHandle(mailboxSum.items_semaphore);
-    CloseHandle(mailboxResult.access_semaphore);
-    CloseHandle(mailboxResult.items_semaphore);
-    CloseHandle(log_semaphore);
-
-    return 0;
+    return DefWindowProc(hwnd, message, wParam, lParam);
 }
